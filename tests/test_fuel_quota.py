@@ -10,11 +10,13 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import fields
 from odoo.exceptions import ValidationError
-from odoo.tests import TransactionCase, tagged
+from odoo.tests import tagged
+
+from .common import SecretariatCase
 
 
 @tagged('post_install', '-at_install')
-class TestFuelQuota(TransactionCase):
+class TestFuelQuota(SecretariatCase):
 
     @classmethod
     def setUpClass(cls):

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Secrétariat',
-    'version': '17.0.2.0.1',
+    'version': '17.0.2.1.0',
     'category': 'Administration',
     'summary': "Outils du secrétariat — tableau de bord, bons de carburant, et fonctionnalités à venir",
     'description': """

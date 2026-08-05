@@ -41,6 +41,9 @@ _logger = logging.getLogger(__name__)
 
 try:
     import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
 except ImportError:  # pragma: no cover - dépendance déclarée au manifeste
     openpyxl = None
 
@@ -75,6 +78,58 @@ _MAX_FILE_SIZE = 25 * 1024 * 1024
 _TOTAL_TOLERANCE = 1.0
 # Nombre de lignes scannées à la recherche de l'en-tête
 _HEADER_SCAN_ROWS = 10
+
+# --- Modèle vierge proposé au téléchargement ------------------------------
+_TEMPLATE_HEADERS = ["Numéro", "Date", "Engin", "Nom", "Carburant",
+                     "Prix Unitaire", "Quantité", "Total"]
+_TEMPLATE_WIDTHS = [12, 12, 24, 24, 16, 14, 11, 14]
+# Lignes préformatées : au-delà, la saisie continue sans mise en forme, et
+# l'import lit la feuille jusqu'à sa dernière ligne remplie.
+_TEMPLATE_ROWS = 300
+
+_TEMPLATE_GUIDE = [
+    ("Numéro",
+     "Le numéro imprimé sur la souche. Obligatoire — une ligne sans numéro "
+     "est ignorée (c'est ainsi que les lignes de total en bas de feuille sont "
+     "écartées). Le même numéro peut revenir plusieurs fois : un bon Super et "
+     "un bon Lubrifiant peuvent porter le même numéro le même jour."),
+    ("Date",
+     "La date du bon. Obligatoire. Format jj/mm/aaaa, ou une vraie date "
+     "Excel."),
+    ("Engin",
+     "Le véhicule, la moto, l'engin d'usine… tel qu'écrit sur le bon. "
+     "Facultatif : un bon sans engin est repris et marqué « à compléter »."),
+    ("Nom",
+     "Le bénéficiaire : un employé, un service (Usine, Personnel) ou un "
+     "organisme (Douanes, CCC). Facultatif, même remarque."),
+    ("Carburant",
+     "Super, Gasoil, Lubrifiant, Gaz… Obligatoire. Choisissez-le dans la "
+     "liste déroulante ; les accents et la casse n'ont pas d'importance."),
+    ("Prix Unitaire",
+     "Le prix appliqué à ce bon. S'il est laissé vide, le prix courant du "
+     "carburant est repris automatiquement, et le bon en porte la mention."),
+    ("Quantité",
+     "Obligatoire et strictement positive. En litres pour les carburants, à "
+     "l'unité pour les lubrifiants et le gaz."),
+    ("Total",
+     "Calculé tout seul. Vous pouvez le laisser tel quel : à l'import, c'est "
+     "prix × quantité qui fait foi."),
+]
+
+_TEMPLATE_NOTES = [
+    "Ne changez ni le nom ni l'ordre des colonnes : c'est à leur libellé que "
+    "le fichier est reconnu. En revanche, vous pouvez insérer des lignes "
+    "au-dessus de l'en-tête (un titre, un logo) : il est cherché dans les dix "
+    "premières lignes.",
+    "Vous pouvez créer plusieurs feuilles — une par mois, par exemple. "
+    "L'assistant les proposera toutes, et vous choisirez celles à reprendre.",
+    "Réimporter un fichier déjà repris ne crée aucun doublon : un bon est "
+    "reconnu à son numéro, sa date, son engin, son carburant et sa quantité. "
+    "Vous pouvez donc corriger le fichier et le renvoyer entier sans crainte.",
+    "Les engins, bénéficiaires et carburants absents de la base sont créés "
+    "automatiquement — décochez l'option si vous préférez les saisir vous-même "
+    "avant l'import.",
+]
 
 
 class _LabelResolver:
@@ -186,6 +241,121 @@ class SecretariatFuelImportWizard(models.TransientModel):
     result_html = fields.Html(string="Compte rendu", readonly=True, sanitize=False)
     error_file = fields.Binary(string="Lignes rejetées (CSV)", readonly=True)
     error_file_name = fields.Char(readonly=True)
+
+    # --- Modèle vierge ---
+    template_file = fields.Binary(readonly=True, attachment=False)
+    template_file_name = fields.Char(
+        readonly=True, default="modele_bons_carburant.xlsx")
+
+    # =========================================================================
+    # ÉTAPE 0 — LE MODÈLE VIERGE
+    # =========================================================================
+
+    def action_download_template(self):
+        """Produit un classeur vierge aux bonnes colonnes, et le télécharge.
+
+        Sans lui, la secrétaire doit deviner les libellés exacts attendus —
+        c'est la première marche de l'import, et la plus haute. Le fichier est
+        déposé dans un champ binaire de l'assistant lui-même : pas de pièce
+        jointe qui traîne, l'enregistrement transitoire est purgé tout seul.
+        """
+        self.ensure_one()
+        if openpyxl is None:
+            raise UserError(_(
+                "La bibliothèque Python « openpyxl » est absente du serveur : "
+                "la génération du modèle est indisponible."))
+        self.write({
+            'template_file': base64.b64encode(self._build_template()),
+            'template_file_name': "modele_bons_carburant.xlsx",
+        })
+        return {
+            'type': 'ir.actions.act_url',
+            'target': 'self',
+            'url': '/web/content?model=%s&id=%s&field=template_file'
+                   '&filename_field=template_file_name&download=true' % (
+                       self._name, self.id),
+        }
+
+    def _build_template(self):
+        workbook = openpyxl.Workbook()
+        workbook.remove(workbook.active)
+        self._write_template_sheet(workbook)
+        self._write_template_guide(workbook)
+        stream = io.BytesIO()
+        workbook.save(stream)
+        return stream.getvalue()
+
+    def _write_template_sheet(self, workbook):
+        """La feuille à remplir : mêmes colonnes que le carnet."""
+        sheet = workbook.create_sheet("Bons de carburant")
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="305496")
+        thin = Side(style='thin', color="BFBFBF")
+        for column, title in enumerate(_TEMPLATE_HEADERS, start=1):
+            cell = sheet.cell(1, column, title)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+        for column, width in enumerate(_TEMPLATE_WIDTHS, start=1):
+            sheet.column_dimensions[get_column_letter(column)].width = width
+        sheet.freeze_panes = 'A2'
+
+        # Formats et formule de total sur les premières lignes : la secrétaire
+        # voit le montant se calculer pendant qu'elle saisit. À l'import, c'est
+        # de toute façon prix × quantité qui fait foi.
+        for row in range(2, _TEMPLATE_ROWS + 2):
+            sheet.cell(row, 2).number_format = 'DD/MM/YYYY'
+            sheet.cell(row, 6).number_format = '#,##0'
+            sheet.cell(row, 7).number_format = '#,##0.##'
+            total = sheet.cell(row, 8)
+            total.value = '=IF(OR(F%(r)s="",G%(r)s=""),"",F%(r)s*G%(r)s)' % {'r': row}
+            total.number_format = '#,##0'
+
+        # Liste déroulante des carburants connus, pour éviter les fautes de
+        # frappe. Excel plafonne la formule à 255 caractères : au-delà, on
+        # laisse la colonne libre (l'import rapproche les orthographes).
+        names = self.env['secretariat.fuel.type'].search([]).mapped('name')
+        joined = ",".join(name.replace('"', '') for name in names)
+        if names and len(joined) <= 250:
+            validation = DataValidation(
+                type='list', formula1='"%s"' % joined, allow_blank=True)
+            validation.error = "Choisissez un carburant de la liste."
+            validation.errorTitle = "Carburant inconnu"
+            sheet.add_data_validation(validation)
+            validation.add('E2:E%s' % (_TEMPLATE_ROWS + 1))
+        return sheet
+
+    def _write_template_guide(self, workbook):
+        """Mode d'emploi.
+
+        Disposé en deux colonnes à dessein : la détection d'en-tête exige de
+        trouver Numéro, Date, Carburant ET Quantité sur UNE MÊME ligne. Ici
+        chaque libellé est seul sur sa ligne — cette feuille ne peut donc pas
+        être prise pour une feuille de données.
+        """
+        sheet = workbook.create_sheet("Mode d'emploi")
+        sheet.column_dimensions['A'].width = 20
+        sheet.column_dimensions['B'].width = 96
+
+        sheet.cell(1, 1, "Comment remplir ce classeur").font = Font(bold=True, size=14)
+        row = 3
+        for label, explanation in _TEMPLATE_GUIDE:
+            cell = sheet.cell(row, 1, label)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(vertical='top')
+            body = sheet.cell(row, 2, explanation)
+            body.alignment = Alignment(vertical='top', wrap_text=True)
+            row += 1
+
+        row += 1
+        sheet.cell(row, 1, "Bon à savoir").font = Font(bold=True, size=12)
+        row += 1
+        for note in _TEMPLATE_NOTES:
+            sheet.cell(row, 2, note).alignment = Alignment(
+                vertical='top', wrap_text=True)
+            row += 1
+        return sheet
 
     # =========================================================================
     # ÉTAPE 1 — ANALYSE

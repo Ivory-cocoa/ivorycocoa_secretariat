@@ -10,7 +10,9 @@ l'autre (source de 165 doublons sur 1 377 lignes).
 import base64
 import io
 
-from odoo.tests import TransactionCase, tagged
+from odoo.tests import tagged
+
+from .common import SecretariatCase
 
 try:
     import openpyxl
@@ -37,7 +39,7 @@ def _build_workbook(sheets):
 
 
 @tagged('post_install', '-at_install')
-class TestFuelImportExport(TransactionCase):
+class TestFuelImportExport(SecretariatCase):
 
     @classmethod
     def setUpClass(cls):
@@ -257,6 +259,78 @@ class TestFuelImportExport(TransactionCase):
         wizard.action_import()
         self.assertEqual(wizard.imported_count, 1)
         self.assertFalse(self.Voucher.search([('name', '=', '71')]))
+
+    # =========================================================================
+    # MODÈLE VIERGE
+    # =========================================================================
+
+    def test_template_is_offered_for_download(self):
+        wizard = self.Import.create({})
+        action = wizard.action_download_template()
+        self.assertEqual(action['type'], 'ir.actions.act_url')
+        self.assertIn('field=template_file', action['url'])
+        self.assertTrue(wizard.template_file)
+        self.assertTrue(wizard.template_file_name.endswith('.xlsx'))
+
+    def test_template_carries_the_expected_columns(self):
+        wizard = self.Import.create({})
+        wizard.action_download_template()
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(base64.b64decode(wizard.template_file)))
+        self.assertIn("Mode d'emploi", workbook.sheetnames)
+        sheet = workbook['Bons de carburant']
+        self.assertEqual(
+            [sheet.cell(1, col).value for col in range(1, 9)],
+            ["Numéro", "Date", "Engin", "Nom", "Carburant",
+             "Prix Unitaire", "Quantité", "Total"])
+        # Liste déroulante des carburants : c'est ce qui évite les fautes de
+        # frappe à la source.
+        self.assertTrue(sheet.data_validations.dataValidation)
+
+    def test_the_blank_template_imports_without_creating_anything(self):
+        """Le modèle doit pouvoir être renvoyé tel quel, sans effet de bord.
+
+        Sa feuille « Mode d'emploi » ne doit surtout pas être prise pour des
+        données : ses libellés sont volontairement répartis sur des lignes
+        différentes, la détection d'en-tête ne peut donc pas s'y accrocher.
+        """
+        template = self.Import.create({})
+        template.action_download_template()
+
+        wizard = self.Import.create({
+            'file_data': template.template_file,
+            'file_name': 'modele_bons_carburant.xlsx',
+        })
+        wizard.action_analyze()
+        self.assertEqual(sum(wizard.sheet_ids.mapped('row_count')), 0)
+        self.assertEqual(sum(wizard.sheet_ids.mapped('error_count')), 0)
+        wizard.action_import()
+        self.assertEqual(wizard.imported_count, 0)
+        self.assertEqual(wizard.created_vehicle_count, 0)
+
+    def test_a_filled_template_imports(self):
+        """Le classeur rendu par la secrétaire doit passer sans retouche."""
+        template = self.Import.create({})
+        template.action_download_template()
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(base64.b64decode(template.template_file)))
+        sheet = workbook['Bons de carburant']
+        for col, value in enumerate(
+                (4242, '12/06/2026', 'Moto Yao', 'Yao', 'Super', 875, 8), start=1):
+            sheet.cell(2, col, value)
+        stream = io.BytesIO()
+        workbook.save(stream)
+
+        wizard = self.Import.create({
+            'file_data': base64.b64encode(stream.getvalue()),
+            'file_name': 'modele_rempli.xlsx',
+        })
+        wizard.action_analyze()
+        wizard.action_import()
+        self.assertEqual(wizard.imported_count, 1)
+        self.assertEqual(wizard.error_count, 0)
+        voucher = self.Voucher.search([('name', '=', '4242')])
+        self.assertAlmostEqual(voucher.amount_total, 7000.0)
 
     # =========================================================================
     # EXPORT

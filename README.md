@@ -141,6 +141,18 @@ Les bons annulés ne consomment pas la dotation.
 
 ### Import Excel
 
+Un bouton **Télécharger le modèle Excel** ouvre l'assistant sur un classeur
+prêt à remplir : les huit colonnes au bon libellé, la liste déroulante des
+carburants connus, le total calculé par formule, et une feuille
+**Mode d'emploi** qui dit, colonne par colonne, ce qui est obligatoire et ce
+qui ne l'est pas.
+
+> La feuille « Mode d'emploi » ne peut pas être prise pour des données : la
+> détection d'en-tête exige de trouver Numéro, Date, Carburant **et** Quantité
+> sur une même ligne, or le mode d'emploi les répartit sur des lignes
+> différentes. Le modèle vierge se réimporte donc sans rien créer — c'est
+> testé.
+
 `Secrétariat → Carburant → Importer depuis Excel`, en trois temps :
 
 1. **Fichier** — dépôt du `.xlsx` et options (créer les référentiels manquants,
@@ -225,12 +237,18 @@ n'ouvre donc pas l'assistant de mise en page d'Odoo (`config=False`).
 
 ## Tests
 
-71 tests, répartis en cinq fichiers :
+75 tests, répartis en cinq fichiers. Ils partent tous de `SecretariatCase`
+(`tests/common.py`), qui **vide le registre des bons** avant chaque classe :
+plusieurs écrans agrègent toute la base (bons à compléter, export « toute la
+période », état du mois), des tests qui comptent des enregistrements ne
+tiendraient donc que sur une base vierge. Grâce à cet isolement, la suite peut
+être lancée sur une base déjà peuplée — vérifié sur les 1 211 bons du classeur
+repris. Rien n'est détruit : Odoo annule la transaction à la fin.
 
 | Fichier | Couvre |
 |---|---|
 | `test_fuel_voucher.py` | Calculs, verrou de validation, garde-fous et avertissements de saisie |
-| `test_fuel_import_export.py` | Import tolérant et idempotent, échappement du compte rendu, export et aller-retour |
+| `test_fuel_import_export.py` | Modèle vierge, import tolérant et idempotent, échappement du compte rendu, export et aller-retour |
 | `test_fuel_quota.py` | Dotation mensuelle, filtre de dépassement, avertissement |
 | `test_reports.py` | Rendu des deux rapports et données de l'état mensuel |
 | `test_dashboard.py` | Structure du retour, périodes, variations, compteurs, doublons, anomalies, tendance |

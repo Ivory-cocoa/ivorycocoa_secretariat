@@ -10,11 +10,13 @@ mise à l'épreuve — structure du retour, comparaison de périodes, compteurs
 from dateutil.relativedelta import relativedelta
 
 from odoo import fields
-from odoo.tests import TransactionCase, tagged
+from odoo.tests import tagged
+
+from .common import SecretariatCase
 
 
 @tagged('post_install', '-at_install')
-class TestSecretariatDashboard(TransactionCase):
+class TestSecretariatDashboard(SecretariatCase):
 
     @classmethod
     def setUpClass(cls):

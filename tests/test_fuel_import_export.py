@@ -197,6 +197,110 @@ class TestFuelImportExport(SecretariatCase):
         self.assertEqual(wizard.state, 'upload')
         self.assertFalse(wizard.sheet_ids)
 
+    def test_the_rejected_rows_come_back_ready_to_be_fixed(self):
+        """Le classeur des rejets doit se corriger et se renvoyer tel quel.
+
+        C'est la boucle qui compte : un CSV obligeait à reconstruire un
+        classeur. Ici on corrige la cellule fautive et on renvoie le fichier.
+        """
+        wizard = self._run_import({'Septembre 2026': [
+            (200, '01/09/2026', 'A', 'X', 'Super', 875, 10, 8750),
+            (201, None, 'B', 'Y', 'Super', 875, 20, 17500),   # date absente
+        ]})
+        self.assertEqual(wizard.imported_count, 1)
+        self.assertEqual(wizard.error_count, 1)
+
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(base64.b64decode(wizard.error_file)))
+        sheet = workbook['À corriger']
+        header_row = 3
+        self.assertEqual(
+            [sheet.cell(header_row, col).value for col in range(1, 9)],
+            ["Numéro", "Date", "Engin", "Nom", "Carburant",
+             "Prix Unitaire", "Quantité", "Total"])
+        # Le numéro est restitué tel qu'il était dans le fichier d'origine —
+        # ici un nombre, pas du texte : la secrétaire retrouve sa saisie.
+        self.assertEqual(str(sheet.cell(header_row + 1, 1).value), '201')
+        # La cellule fautive — la date — est surlignée.
+        self.assertEqual(
+            sheet.cell(header_row + 1, 2).fill.fgColor.rgb[-6:], 'F9D6D5')
+
+        # La secrétaire corrige, et renvoie le fichier sans rien reconstruire.
+        sheet.cell(header_row + 1, 2, '02/09/2026')
+        stream = io.BytesIO()
+        workbook.save(stream)
+        fixed = self.Import.create({
+            'file_data': base64.b64encode(stream.getvalue()),
+            'file_name': 'bons_carburant_a_corriger.xlsx',
+        })
+        fixed.action_analyze()
+        fixed.action_import()
+        self.assertEqual(fixed.imported_count, 1)
+        self.assertEqual(fixed.error_count, 0)
+        self.assertTrue(self.Voucher.search([('name', '=', '201')]))
+
+    def test_the_rejects_file_ignores_its_own_extra_columns(self):
+        """« Motif du rejet » et « Origine » ne doivent pas gêner la relecture."""
+        wizard = self._run_import({'Octobre 2026': [
+            (210, None, 'A', 'X', 'Super', 875, 10, 8750),
+        ]})
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(base64.b64decode(wizard.error_file)))
+        sheet = workbook['À corriger']
+        self.assertEqual(sheet.cell(3, 9).value, "Motif du rejet")
+        self.assertTrue(sheet.cell(4, 9).value)  # le motif est renseigné
+        sheet.cell(4, 2, '03/10/2026')
+        stream = io.BytesIO()
+        workbook.save(stream)
+
+        fixed = self.Import.create({
+            'file_data': base64.b64encode(stream.getvalue()),
+            'file_name': 'corrige.xlsx'})
+        fixed.action_analyze()
+        fixed.action_import()
+        self.assertEqual(fixed.imported_count, 1)
+        voucher = self.Voucher.search([('name', '=', '210')])
+        self.assertAlmostEqual(voucher.quantity, 10.0)
+
+    # =========================================================================
+    # APERÇU
+    # =========================================================================
+
+    def test_the_analysis_shows_a_preview(self):
+        wizard = self.Import.create({
+            'file_data': _build_workbook({'Novembre 2026': [
+                (220, '02/11/2026', 'Moto Yao', 'Yao', 'Super', 875, 8, 7000),
+            ]}),
+            'file_name': 'carnet.xlsx'})
+        wizard.action_analyze()
+        preview = wizard.preview_html
+        self.assertIn('220', preview)
+        self.assertIn('02/11/2026', preview)
+        self.assertIn('Moto Yao', preview)
+        # Un référentiel absent de la base est annoncé comme tel.
+        self.assertIn('nouveau', preview)
+
+    def test_the_preview_escapes_what_comes_from_the_file(self):
+        wizard = self.Import.create({
+            'file_data': _build_workbook({'Feuille <b>brute': [
+                (221, '02/11/2026', '<b>Engin', 'Y', 'Super', 875, 8, 7000),
+            ]}),
+            'file_name': 'carnet.xlsx'})
+        wizard.action_analyze()
+        self.assertNotIn('<b>Engin', wizard.preview_html)
+        self.assertIn('&lt;b&gt;Engin', wizard.preview_html)
+
+    def test_a_known_referential_is_not_announced_as_new(self):
+        self.env['secretariat.vehicle'].create({'name': 'Moto Connue'})
+        wizard = self.Import.create({
+            'file_data': _build_workbook({'Décembre 2026': [
+                (222, '02/12/2026', 'moto connue', '', 'Super', 875, 8, 7000),
+            ]}),
+            'file_name': 'carnet.xlsx'})
+        wizard.action_analyze()
+        self.assertIn('moto connue', wizard.preview_html)
+        self.assertNotIn('nouveau', wizard.preview_html)
+
     def test_import_reports_rejected_rows(self):
         wizard = self._run_import({'Août 2026': [
             (40, None, 'A', 'X', 'Super', 875, 10, 8750),

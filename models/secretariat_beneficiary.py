@@ -15,7 +15,10 @@ from .secretariat_fuel_type import normalize_label
 class SecretariatBeneficiary(models.Model):
     _name = 'secretariat.fuel.beneficiary'
     _description = "Bénéficiaire de bon de carburant"
+    _inherit = ['secretariat.referential.mixin']
     _order = 'name'
+
+    _merge_voucher_field = 'beneficiary_id'
 
     name = fields.Char(
         string="Nom",

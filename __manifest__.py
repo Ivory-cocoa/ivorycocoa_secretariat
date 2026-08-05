@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Secrétariat',
-    'version': '17.0.2.1.0',
+    'version': '17.0.2.2.0',
     'category': 'Administration',
     'summary': "Outils du secrétariat — tableau de bord, bons de carburant, et fonctionnalités à venir",
     'description': """
@@ -79,6 +79,7 @@ Profils
         'wizards/secretariat_fuel_import_wizard_views.xml',
         'wizards/secretariat_fuel_export_wizard_views.xml',
         'wizards/secretariat_fuel_monthly_report_wizard_views.xml',
+        'wizards/secretariat_merge_wizard_views.xml',
         # Menus (en dernier : référencent les actions ci-dessus)
         'views/secretariat_menu_views.xml',
     ],

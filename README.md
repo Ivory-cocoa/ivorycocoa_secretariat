@@ -6,8 +6,8 @@ la racine **Secrétariat**, et apporte sa section au tableau de bord.
 
 | Fonctionnalité | Version | Menu |
 |---|---|---|
-| Tableau de bord | 17.0.2.0.0 | Secrétariat → Tableau de bord |
-| Bons de carburant | 17.0.2.0.0 | Secrétariat → Carburant |
+| Tableau de bord | 17.0.2.2.0 | Secrétariat → Tableau de bord |
+| Bons de carburant | 17.0.2.2.0 | Secrétariat → Carburant |
 
 ---
 
@@ -160,8 +160,21 @@ qui ne l'est pas.
 2. **Analyse** — la liste des feuilles est proposée avec, pour chacune, le
    nombre de lignes, de nouveautés, de doublons et d'erreurs. On décoche ce
    qu'on ne veut pas reprendre. Un bouton **Retour** ramène à l'étape 1.
-3. **Résultat** — compte rendu, référentiels créés, et CSV téléchargeable des
-   lignes rejetées.
+2 bis. **Aperçu** — l'étape 2 montre aussi les huit premières lignes *telles
+   qu'elles ont été comprises*, chaque valeur en face de sa colonne. Si l'en-tête
+   avait été mal reconnu, cela se voit avant de s'engager, pas après. Les
+   libellés absents de la base y portent une pastille « nouveau » : c'est là
+   qu'on repère la faute de frappe qui allait créer un engin de plus.
+3. **Résultat** — compte rendu, référentiels créés, et le classeur des lignes
+   non reprises.
+
+#### La boucle de correction
+
+Les lignes rejetées ressortent **au format même du modèle d'import**, cellule
+fautive surlignée en rouge et motif en clair. La secrétaire corrige, renvoie le
+fichier tel quel, et c'est fini : ni CSV à convertir, ni classeur à
+reconstruire. Les colonnes « Motif du rejet » et « Origine » sont ignorées à la
+relecture, elles peuvent rester.
 
 L'import est **tolérant** et **idempotent** :
 
@@ -213,6 +226,34 @@ export → import ne crée aucun doublon (test `test_export_round_trips_through_
 > la feuille d'origine : dans le classeur repris, la feuille « Janvier 2026 »
 > contenait aussi des bons de décembre 2025.
 
+### Doublons de référentiels
+
+L'import crée un engin par libellé rencontré : la reprise du classeur en a
+produit **212 engins et 105 bénéficiaires**. La normalisation rattrape la casse
+et les accents, pas « Camara » contre « Camara M. ».
+
+Le filtre **Doublons probables**, dans la recherche des engins et des
+bénéficiaires, rapproche les libellés voisins (ressemblance ≥ 85 %). Une règle
+supplémentaire évite le piège des immatriculations : **deux libellés dont les
+chiffres diffèrent ne sont pas le même objet** — « AA 720 AC01 » et
+« AA 790 AC01 » sont deux véhicules. Une suite de chiffres qui en prolonge une
+autre reste tolérée, pour ne pas séparer « AA 892 NJ » de « AA 892 NJ01 ».
+
+Sur les données reprises, le filtre signale 43 engins et 22 bénéficiaires. Cela
+reste une **suggestion** : « AA 164 KT01 » et « AA 164 VT01 » peuvent être une
+faute de frappe comme deux véhicules. D'où une fusion explicite et confirmée,
+jamais automatique.
+
+Sélectionner les enregistrements → menu **Action → Fusionner**. L'assistant
+propose de conserver celui qui porte le plus de bons (le moins de choses à
+déplacer), annonce combien de bons vont bouger, et écrit les anciens libellés
+dans les notes du survivant — ils restent ainsi retrouvables par la recherche,
+ce qui compte quand on cherche un bon d'après ce qui était écrit sur la souche.
+
+> La fusion repointe aussi les bons **validés**. C'est la seule entorse au
+> verrou, elle est portée par un contexte dédié et ne desserre que l'engin et
+> le bénéficiaire : le numéro, la date, le prix et la quantité restent figés.
+
 ### Rapports PDF
 
 | Rapport | Format | Où |
@@ -237,7 +278,7 @@ n'ouvre donc pas l'assistant de mise en page d'Odoo (`config=False`).
 
 ## Tests
 
-75 tests, répartis en cinq fichiers. Ils partent tous de `SecretariatCase`
+98 tests, répartis en six fichiers. Ils partent tous de `SecretariatCase`
 (`tests/common.py`), qui **vide le registre des bons** avant chaque classe :
 plusieurs écrans agrègent toute la base (bons à compléter, export « toute la
 période », état du mois), des tests qui comptent des enregistrements ne
@@ -252,6 +293,7 @@ repris. Rien n'est détruit : Odoo annule la transaction à la fin.
 | `test_fuel_quota.py` | Dotation mensuelle, filtre de dépassement, avertissement |
 | `test_reports.py` | Rendu des deux rapports et données de l'état mensuel |
 | `test_dashboard.py` | Structure du retour, périodes, variations, compteurs, doublons, anomalies, tendance |
+| `test_merge.py` | Rapprochement des libellés (dont le piège des immatriculations) et fusion |
 
 ```bash
 docker exec odoo17-web-dev odoo -d <base> -u ivorycocoa_secretariat \

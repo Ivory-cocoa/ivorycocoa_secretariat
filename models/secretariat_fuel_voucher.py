@@ -368,7 +368,15 @@ class SecretariatFuelVoucher(models.Model):
         """
         if vals.get('name'):
             vals['name'] = str(vals['name']).strip()
-        touched = set(LOCKED_FIELDS) & set(vals)
+        protected = set(LOCKED_FIELDS)
+        if self.env.context.get('secretariat_referential_merge'):
+            # Seule la fusion de référentiels lève une partie du verrou, et
+            # seulement sur l'engin et le bénéficiaire : elle repointe le bon
+            # vers l'enregistrement conservé, qui désigne la MÊME réalité —
+            # « Camara » et « Camara M. » sont une seule personne. Le numéro,
+            # la date, le prix et la quantité restent figés.
+            protected -= {'vehicle_id', 'beneficiary_id'}
+        touched = protected & set(vals)
         if touched:
             locked = self.filtered(
                 lambda v: v.state == 'confirmed' and v._has_real_change(vals, touched))

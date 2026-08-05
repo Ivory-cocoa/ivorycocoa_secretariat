@@ -24,7 +24,10 @@ from .secretariat_fuel_type import normalize_label
 class SecretariatVehicle(models.Model):
     _name = 'secretariat.vehicle'
     _description = "Engin"
+    _inherit = ['secretariat.referential.mixin']
     _order = 'name'
+
+    _merge_voucher_field = 'vehicle_id'
 
     name = fields.Char(
         string="Engin",

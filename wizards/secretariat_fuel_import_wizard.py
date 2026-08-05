@@ -16,8 +16,9 @@ L'import est donc conçu pour être tolérant ET idempotent :
   le bon créé ;
 * prix illisible remplacé par le prix courant du carburant, également signalé ;
 * dédoublonnage dans le fichier ET vis-à-vis des bons déjà en base ;
-* les lignes rejetées sont listées et téléchargeables en CSV, aucune ligne
-  n'est perdue silencieusement.
+* aucune ligne n'est perdue silencieusement : les lignes non reprises
+  ressortent dans un classeur au format même du modèle d'import, cellules
+  fautives surlignées, prêt à être corrigé et renvoyé tel quel.
 
 Sur le classeur de référence (1 377 lignes, 15 feuilles) : 1 376 lignes
 exploitables, 165 doublons écartés, 1 211 bons créés, 1 ligne rejetée (date
@@ -25,7 +26,6 @@ réellement absente).
 """
 
 import base64
-import csv
 import io
 import logging
 from datetime import date, datetime, timedelta
@@ -204,6 +204,11 @@ class SecretariatFuelImportWizard(models.TransientModel):
 
     sheet_ids = fields.One2many(
         'secretariat.fuel.import.sheet', 'wizard_id', string="Feuilles")
+    preview_html = fields.Html(
+        string="Aperçu", readonly=True, sanitize=False,
+        help="Les premières lignes du fichier, telles qu'elles ont été "
+             "comprises. C'est le moment de vérifier que les colonnes sont "
+             "bien tombées en face.")
 
     create_missing = fields.Boolean(
         string="Créer les référentiels manquants",
@@ -239,7 +244,7 @@ class SecretariatFuelImportWizard(models.TransientModel):
     created_beneficiary_count = fields.Integer(string="Bénéficiaires créés", readonly=True)
     created_fuel_count = fields.Integer(string="Carburants créés", readonly=True)
     result_html = fields.Html(string="Compte rendu", readonly=True, sanitize=False)
-    error_file = fields.Binary(string="Lignes rejetées (CSV)", readonly=True)
+    error_file = fields.Binary(string="Lignes à corriger (Excel)", readonly=True)
     error_file_name = fields.Char(readonly=True)
 
     # --- Modèle vierge ---
@@ -400,7 +405,11 @@ class SecretariatFuelImportWizard(models.TransientModel):
                 'duplicate_count': duplicate_count,
                 'error_count': len(errors),
             }))
-        self.write({'sheet_ids': lines, 'state': 'analyzed'})
+        self.write({
+            'sheet_ids': lines,
+            'state': 'analyzed',
+            'preview_html': self._build_preview(all_rows),
+        })
         return self._reopen()
 
     def action_back(self):
@@ -457,7 +466,7 @@ class SecretariatFuelImportWizard(models.TransientModel):
                 values_list.append(self._prepare_voucher_values(
                     row, referentials, created_counts))
             except UserError as exc:
-                errors.append(dict(row, error=str(exc)))
+                errors.append(dict(row, error=str(exc), culprit='fuel'))
 
         vouchers = Voucher.create(values_list) if values_list else Voucher
 
@@ -471,7 +480,7 @@ class SecretariatFuelImportWizard(models.TransientModel):
             'created_fuel_count': created_counts['fuel'],
             'result_html': self._build_report(len(vouchers), duplicates, errors),
             'error_file': self._build_error_file(errors),
-            'error_file_name': errors and "bons_carburant_lignes_rejetees.csv" or False,
+            'error_file_name': errors and "bons_carburant_a_corriger.xlsx" or False,
         })
         _logger.info(
             "Import bons de carburant : %s créés, %s doublons, %s erreurs (%s)",
@@ -556,14 +565,19 @@ class SecretariatFuelImportWizard(models.TransientModel):
             row['quantity'] = self._to_float(raw.get('quantity'))
             row['total'] = self._to_float(raw.get('total'))
 
+            # « culprit » désigne la colonne fautive : c'est elle que le
+            # classeur des lignes à corriger surligne en rouge.
             if row['date'] is None:
-                errors.append(dict(row, error=_("Date illisible ou absente")))
+                errors.append(dict(
+                    row, error=_("Date illisible ou absente"), culprit='date'))
                 continue
             if not row['fuel']:
-                errors.append(dict(row, error=_("Carburant absent")))
+                errors.append(dict(
+                    row, error=_("Carburant absent"), culprit='fuel'))
                 continue
             if row['quantity'] is None or row['quantity'] <= 0:
-                errors.append(dict(row, error=_("Quantité absente ou nulle")))
+                errors.append(dict(
+                    row, error=_("Quantité absente ou nulle"), culprit='quantity'))
                 continue
             rows.append(row)
         return rows, errors
@@ -783,6 +797,77 @@ class SecretariatFuelImportWizard(models.TransientModel):
             row['quantity'],
         )
 
+    def _build_preview(self, rows, limit=8):
+        """Les premières lignes, telles qu'elles ont été comprises.
+
+        Les compteurs de l'étape 2 disent combien de lignes seront reprises,
+        pas ce qu'elles contiennent. Si une colonne avait été mal reconnue —
+        un fichier dont l'en-tête diffère, des colonnes interverties — la
+        secrétaire ne s'en apercevait qu'une fois les bons créés. Voir huit
+        lignes en face de leur libellé lève le doute avant de s'engager.
+
+        Les libellés absents de la base sont signalés « nouveau » : c'est là
+        qu'on repère une faute de frappe qui allait créer un engin de plus.
+        """
+        if not rows:
+            return False
+
+        known = {
+            kind: {
+                record['normalized_name']
+                for record in self.env[model].with_context(
+                    active_test=False).search_read([], ['normalized_name'])
+            }
+            for kind, model in (('vehicle', 'secretariat.vehicle'),
+                                ('beneficiary', 'secretariat.fuel.beneficiary'),
+                                ('fuel', 'secretariat.fuel.type'))
+        }
+        prices = {
+            fuel.normalized_name: fuel.price
+            for fuel in self.env['secretariat.fuel.type'].search([])
+        }
+
+        def label(value, kind):
+            """Le libellé, suivi d'une pastille quand il est inconnu."""
+            if not value:
+                return Markup('<span class="text-muted">—</span>')
+            normalized = normalize_label(value)
+            if normalized in known[kind]:
+                return escape(value)
+            return Markup('%s <span class="badge text-bg-info">nouveau</span>') \
+                % escape(value)
+
+        parts = [Markup(
+            '<table class="table table-sm table-striped mb-1">'
+            '<thead><tr>'
+            '<th>Feuille</th><th>Ligne</th><th>N°</th><th>Date</th>'
+            '<th>Engin</th><th>Bénéficiaire</th><th>Carburant</th>'
+            '<th class="text-end">Prix</th><th class="text-end">Quantité</th>'
+            '<th class="text-end">Total</th>'
+            '</tr></thead><tbody>')]
+        for row in rows[:limit]:
+            price = row['price']
+            if price is None or price <= 0:
+                price = prices.get(normalize_label(row['fuel']), 0.0)
+            parts.append(Markup(
+                '<tr><td>%s</td><td>%s</td><td><strong>%s</strong></td><td>%s</td>'
+                '<td>%s</td><td>%s</td><td>%s</td>'
+                '<td class="text-end">%s</td><td class="text-end">%s</td>'
+                '<td class="text-end">%s</td></tr>') % (
+                escape(row['sheet']), row['row'], escape(row['name']),
+                row['date'].strftime('%d/%m/%Y') if row['date'] else '',
+                label(row['vehicle'], 'vehicle'),
+                label(row['beneficiary'], 'beneficiary'),
+                label(row['fuel'], 'fuel'),
+                round(price), round(row['quantity'], 2),
+                round(price * row['quantity'])))
+        parts.append(Markup('</tbody></table>'))
+        if len(rows) > limit:
+            parts.append(Markup(
+                '<p class="text-muted mb-0"><em>… et %s autre(s) ligne(s).</em></p>')
+                % (len(rows) - limit))
+        return Markup('').join(parts)
+
     def _build_report(self, imported, duplicates, errors):
         """Compte rendu HTML.
 
@@ -809,8 +894,9 @@ class SecretariatFuelImportWizard(models.TransientModel):
         if errors:
             parts.append(Markup(
                 '<p class="text-danger"><strong>%s ligne(s) rejetée(s)</strong> — '
-                'téléchargez le CSV ci-dessous pour les corriger puis relancez '
-                "l'import (les lignes déjà reprises ne seront pas dupliquées).</p>")
+                'ouvrez le classeur ci-dessous, corrigez les cellules en rouge '
+                "et renvoyez-le tel quel à l'assistant : les lignes déjà reprises "
+                'ne seront pas dupliquées.</p>')
                 % len(errors))
             parts.append(Markup('<ul>'))
             for error in errors[:10]:
@@ -826,21 +912,70 @@ class SecretariatFuelImportWizard(models.TransientModel):
         return Markup('').join(parts)
 
     def _build_error_file(self, errors):
-        if not errors:
+        """Les lignes non reprises, dans le format même du modèle d'import.
+
+        C'est le point : la secrétaire corrige les cellules surlignées et
+        renvoie CE fichier tel quel. Un CSV l'obligeait à reconstruire un
+        classeur — la boucle de correction était cassée à l'endroit précis où
+        elle devait être la plus fluide.
+
+        La colonne « Motif du rejet » n'est pas reconnue à la relecture : elle
+        peut rester, elle sera ignorée. Et comme le dédoublonnage porte sur le
+        contenu du bon, renvoyer le fichier ne crée aucun doublon même si une
+        ligne avait finalement été reprise entre-temps.
+        """
+        if not errors or openpyxl is None:
             return False
-        output = io.StringIO()
-        writer = csv.writer(output, delimiter=';')
-        writer.writerow(["Feuille", "Ligne", "Numéro", "Date", "Engin", "Nom",
-                         "Carburant", "Prix", "Quantité", "Total", "Motif"])
-        for error in errors:
-            writer.writerow([
-                error.get('sheet'), error.get('row'), error.get('raw_name'),
-                error.get('raw_date'), error.get('vehicle'),
-                error.get('beneficiary'), error.get('fuel'),
-                error.get('price'), error.get('quantity'), error.get('total'),
-                error.get('error'),
-            ])
-        return base64.b64encode(output.getvalue().encode('utf-8-sig'))
+
+        workbook = openpyxl.Workbook()
+        workbook.remove(workbook.active)
+        sheet = workbook.create_sheet("À corriger")
+
+        sheet.cell(1, 1, "Lignes non reprises — corrigez les cellules en rouge, "
+                         "puis renvoyez ce fichier à l'assistant d'import.").font = \
+            Font(bold=True, color="C0392B")
+        header_row = 3
+
+        headers = _TEMPLATE_HEADERS + ["Motif du rejet", "Origine"]
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="305496")
+        for column, title in enumerate(headers, start=1):
+            cell = sheet.cell(header_row, column, title)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        for column, width in enumerate(_TEMPLATE_WIDTHS + [42, 28], start=1):
+            sheet.column_dimensions[get_column_letter(column)].width = width
+        sheet.freeze_panes = sheet.cell(header_row + 1, 1).coordinate
+
+        culprit_fill = PatternFill("solid", fgColor="F9D6D5")
+        culprit_font = Font(bold=True, color="C0392B")
+        culprit_column = {'date': 2, 'vehicle': 3, 'beneficiary': 4,
+                          'fuel': 5, 'price': 6, 'quantity': 7}
+
+        for index, error in enumerate(errors):
+            row_index = header_row + 1 + index
+            values = [
+                error.get('raw_name'), error.get('raw_date'),
+                error.get('vehicle'), error.get('beneficiary'),
+                error.get('fuel'), error.get('price'), error.get('quantity'),
+                error.get('total'), error.get('error'),
+                "%s, ligne %s" % (error.get('sheet') or '', error.get('row') or ''),
+            ]
+            for column, value in enumerate(values, start=1):
+                cell = sheet.cell(row_index, column, value)
+                if column == 2 and isinstance(value, (date, datetime)):
+                    cell.number_format = 'DD/MM/YYYY'
+            column = culprit_column.get(error.get('culprit'))
+            if column:
+                faulty = sheet.cell(row_index, column)
+                faulty.fill = culprit_fill
+                faulty.font = culprit_font
+            sheet.cell(row_index, 9).font = Font(color="C0392B")
+
+        stream = io.BytesIO()
+        workbook.save(stream)
+        return base64.b64encode(stream.getvalue())
 
     def _reopen(self):
         return {

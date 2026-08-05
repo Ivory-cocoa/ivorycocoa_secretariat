@@ -241,6 +241,20 @@ docker exec odoo17-web-dev odoo -d <base> -u ivorycocoa_secretariat \
     --test-enable --test-tags /ivorycocoa_secretariat --stop-after-init
 ```
 
+## Logo
+
+`static/description/icon.png` (1024 × 1024) est **dessiné par programme**, pas
+peint : `python3 tools/make_icon.py` le régénère à partir des couleurs et des
+proportions déclarées en tête du script. Un **bon détachable** — corps blanc,
+souche perforée — vaut pour tout registre tenu par le secrétariat ; la
+**goutte ambre** dit la fonctionnalité du jour, en accent. Le symbole reste
+donc juste le jour où une deuxième fonctionnalité arrive.
+
+> `ir.ui.menu.web_icon_data` est un champ **stocké**, alimenté depuis le
+> fichier au chargement du module : après avoir changé l'icône, il faut mettre
+> le module à jour (`-u ivorycocoa_secretariat`) pour la voir apparaître dans
+> le menu des applications.
+
 ## Dépendances
 
 * `openpyxl` (déjà installé dans l'image Docker du projet) — import et export.

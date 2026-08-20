@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Secrétariat',
-    'version': '17.0.2.2.0',
+    'version': '17.0.2.2.1',
     'category': 'Administration',
     'summary': "Outils du secrétariat — tableau de bord, bons de carburant, et fonctionnalités à venir",
     'description': """
@@ -45,6 +45,7 @@ Reprend et remplace le classeur Excel tenu à la main (« yasmina_petroleum.xlsx
 
 Profils
 -------
+
 * **Secrétaire** : saisie et import/export des bons.
 * **Responsable du secrétariat** : idem + suppression et configuration.
     """,

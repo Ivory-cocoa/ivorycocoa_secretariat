@@ -39,16 +39,11 @@ def align_companies(env):
 
 def align_voucher_sequence(env):
     """Cale le compteur juste au-dessus du plus grand numéro enregistré."""
-    sequence = env['secretariat.fuel.voucher']._number_sequence()
+    Voucher = env['secretariat.fuel.voucher']
+    sequence = Voucher._number_sequence()
     if not sequence or sequence.implementation != 'standard':
         return
-    env.cr.execute("""
-        SELECT MAX(CAST(name AS BIGINT))
-          FROM secretariat_fuel_voucher
-         WHERE name ~ '^[0-9]+$'
-    """)
-    result = env.cr.fetchone()
-    highest = result[0] if result and result[0] is not None else None
+    highest = Voucher._highest_recorded_number()
     if highest is None:
         return
     if highest + 1 > sequence.number_next_actual:

@@ -386,16 +386,40 @@ du **même** `report_data()` — un chiffre lu dans l'un est celui de l'autre.
 
 ## 3. Paramètres
 
-**Configuration → Paramètres du secrétariat** (assistant, réservé au
-responsable) : station par défaut, seuils de délai d'utilisation, numéro de
-départ et longueur du numéro.
+Quatre réglages : **station par défaut**, **seuils de délai d'utilisation**,
+**numéro de départ des bons** et **longueur du numéro**.
 
-Pourquoi un assistant plutôt que l'écran de configuration d'Odoo : ces valeurs
-vivent sur `res.company` et sur `ir.sequence`, deux modèles qui exigent les
-droits d'**administration**. Il aurait fallu donner ces droits à la personne
-qui, précisément, ne fait que tenir le carnet. L'assistant écrit en `sudo`
-**après** avoir contrôlé explicitement l'appartenance au groupe métier : c'est
-le groupe qui autorise, pas le contournement.
+Ils sont accessibles depuis **deux écrans**, selon le profil :
+
+| Écran | Pour qui | Chemin |
+|---|---|---|
+| **Paramètres → Secrétariat** (`res.config.settings`) | Administrateur | Paramètres, ou Secrétariat → Configuration → Paramètres (administrateur) |
+| **Assistant « Paramètres du secrétariat »** | Responsable du secrétariat | Secrétariat → Configuration → Paramètres du secrétariat |
+
+Pourquoi deux : ces valeurs vivent sur `res.company` et sur `ir.sequence`, et
+`res.config.settings` exige les droits d'**administration**. Il aurait fallu
+les donner à la personne qui, précisément, ne fait que tenir le carnet.
+L'assistant écrit en `sudo` **après** avoir contrôlé explicitement
+l'appartenance au groupe métier : c'est le groupe qui autorise, pas le
+contournement.
+
+Les deux écrans écrivent le **même** stockage et partagent le **même** point
+d'entrée de contrôle, `secretariat.fuel.voucher._configure_numbering()` — ils
+ne peuvent donc pas diverger, et un test le vérifie.
+
+### Numéro de départ
+
+Le numéro de départ est le numéro proposé au **prochain** bon créé : on le
+règle sur le premier numéro du carnet en cours, et il avance ensuite tout
+seul. Les deux écrans affichent à côté le **plus grand numéro déjà
+enregistré**, parce que descendre en dessous fait reproposer des numéros déjà
+servis. Ce n'est pas interdit — un nouveau carnet peut légitimement recommencer
+plus bas, et le numéro de bon n'est pas unique — mais le choix doit être fait
+en connaissance de cause.
+
+Un numéro de départ plus bas **tient** : le recalage automatique ne regarde que
+les bons qui viennent d'être créés, jamais tout le registre. Régler le départ à
+100 alors qu'un bon 6300 existe donne bien 100, puis 101, 102…
 
 ### Profils
 

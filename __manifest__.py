@@ -106,6 +106,7 @@ Profils
         'views/secretariat_fuel_voucher_views.xml',
         'views/secretariat_fuel_invoice_views.xml',
         'views/secretariat_dashboard_views.xml',
+        'views/secretariat_config_settings_views.xml',
         # Wizards
         'wizards/secretariat_fuel_import_wizard_views.xml',
         'wizards/secretariat_fuel_export_wizard_views.xml',

@@ -42,7 +42,7 @@ l'ancien classeur n'a qu'une date ; le repli le laisse dans son mois d'origine.
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.osv import expression
 from odoo.tools import float_compare, float_is_zero
 
@@ -938,6 +938,56 @@ class SecretariatFuelVoucher(models.Model):
             return [text]
         stripped = str(int(text))
         return list(dict.fromkeys([text, stripped, self._normalize_voucher_number(stripped)]))
+
+    @api.model
+    def _highest_recorded_number(self):
+        """Plus grand numéro purement numérique du registre, ou ``None``.
+
+        Lu en SQL, et comparé comme un NOMBRE : « 9 » est plus petit que
+        « 10 », mais plus grand en tri alphabétique. C'est le repère affiché
+        aux écrans de configuration — régler le compteur en dessous ferait
+        reproposer des numéros déjà servis.
+        """
+        self.env.cr.execute("""
+            SELECT MAX(CAST(name AS BIGINT))
+              FROM secretariat_fuel_voucher
+             WHERE name ~ '^[0-9]+$'
+        """)
+        result = self.env.cr.fetchone()
+        return result[0] if result and result[0] is not None else None
+
+    @api.model
+    def _configure_numbering(self, start_number=None, padding=None):
+        """Applique les réglages de numérotation, d'où qu'ils viennent.
+
+        Les deux écrans de configuration (l'assistant du responsable et
+        l'écran Paramètres de l'administrateur) passent par ici : un seul
+        endroit contrôle les valeurs et écrit sur la séquence, donc aucun
+        risque que l'un accepte ce que l'autre refuse.
+
+        Le numéro de départ n'est **pas** refusé s'il repasse sous un numéro
+        déjà enregistré : le numéro de bon n'est pas unique (cf. la docstring
+        du modèle), un carnet peut légitimement recommencer plus bas. Les
+        écrans affichent le plus grand numéro connu pour que le choix soit
+        fait en connaissance de cause.
+        """
+        sequence = self._number_sequence()
+        if not sequence:
+            return False
+        if padding is not None:
+            if not 1 <= padding <= 20:
+                raise UserError(_(
+                    "La longueur du numéro de bon doit être comprise entre "
+                    "1 et 20 caractères."))
+            if sequence.padding != padding:
+                sequence.padding = padding
+        if start_number is not None:
+            if start_number < 1:
+                raise UserError(_(
+                    "Le numéro de départ des bons doit être supérieur à zéro."))
+            if sequence.number_next_actual != start_number:
+                sequence.number_next_actual = start_number
+        return True
 
     def _sync_number_sequence(self):
         """Recale le compteur sur le plus grand numéro réellement utilisé.

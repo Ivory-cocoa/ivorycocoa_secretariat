@@ -10,6 +10,12 @@ le carnet.
 
 Les écritures sont faites en ``sudo`` **après** contrôle explicite du groupe :
 c'est le groupe métier qui autorise, pas le contournement.
+
+Un administrateur trouvera les **mêmes** réglages à leur place habituelle,
+dans **Paramètres → Secrétariat** (``res.config.settings``). Les deux écrans
+écrivent le même stockage et partagent les mêmes contrôles
+(``secretariat.fuel.voucher._configure_numbering``) : ils ne peuvent pas
+diverger.
 """
 
 from odoo import _, api, fields, models
@@ -41,8 +47,8 @@ class SecretariatSettingsWizard(models.TransientModel):
              "de bord : il circule depuis trop longtemps.")
 
     voucher_next_number = fields.Integer(
-        string="Prochain numéro de bon",
-        help="Numéro proposé à la prochaine saisie. Réglez-le sur le premier "
+        string="Numéro de départ des bons",
+        help="Numéro proposé au prochain bon créé. Réglez-le sur le premier "
              "numéro du carnet en cours ; il avance ensuite tout seul.")
     voucher_padding = fields.Integer(
         string="Longueur du numéro",
@@ -76,19 +82,9 @@ class SecretariatSettingsWizard(models.TransientModel):
 
     @api.model
     def _highest_number(self):
-        """Plus grand numéro purement numérique du registre.
-
-        Lu en SQL : la comparaison doit porter sur la valeur du numéro, pas
-        sur son écriture — « 9 » est plus petit que « 10 », mais « 9 » est
-        plus grand que « 10 » en tri alphabétique.
-        """
-        self.env.cr.execute("""
-            SELECT MAX(CAST(name AS BIGINT))
-              FROM secretariat_fuel_voucher
-             WHERE name ~ '^[0-9]+$'
-        """)
-        result = self.env.cr.fetchone()
-        return str(result[0]) if result and result[0] is not None else _("aucun")
+        """Plus grand numéro du registre, tel qu'il s'affiche à l'écran."""
+        highest = self.env['secretariat.fuel.voucher']._highest_recorded_number()
+        return str(highest) if highest is not None else _("aucun")
 
     # =========================================================================
     # ENREGISTREMENT
@@ -106,20 +102,15 @@ class SecretariatSettingsWizard(models.TransientModel):
                 "Le seuil critique (%(critical)s j) doit être supérieur ou "
                 "égal au seuil d'alerte (%(alert)s j).",
                 critical=self.usage_critical_days, alert=self.usage_alert_days))
-        if self.voucher_padding < 1 or self.voucher_padding > 20:
-            raise UserError(_(
-                "La longueur du numéro doit être comprise entre 1 et 20."))
-        if self.voucher_next_number < 1:
-            raise UserError(_("Le prochain numéro doit être positif."))
-
         self.company_id.sudo().write({
             'secretariat_fuel_station_id': self.station_id.id,
             'secretariat_usage_alert_days': self.usage_alert_days,
             'secretariat_usage_critical_days': self.usage_critical_days,
         })
-        sequence = self.env['secretariat.fuel.voucher']._number_sequence()
-        if sequence:
-            sequence.write({'padding': self.voucher_padding})
-            if sequence.number_next_actual != self.voucher_next_number:
-                sequence.number_next_actual = self.voucher_next_number
+        # Contrôles et écriture de la séquence : un seul endroit, partagé avec
+        # l'écran Paramètres.
+        self.env['secretariat.fuel.voucher']._configure_numbering(
+            start_number=self.voucher_next_number,
+            padding=self.voucher_padding,
+        )
         return {'type': 'ir.actions.act_window_close'}

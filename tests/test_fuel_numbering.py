@@ -141,6 +141,16 @@ class TestSecretariatSettings(SecretariatCase):
             ])],
         })
 
+    def _voucher(self, **overrides):
+        values = {
+            'date': '2026-01-07',
+            'fuel_type_id': self.fuel.id,
+            'price_unit': 875.0,
+            'quantity': 10.0,
+        }
+        values.update(overrides)
+        return self.Voucher.create(values)
+
     def test_a_secretary_can_create_a_voucher(self):
         """Le numéro proposé lit une séquence — hors de portée de son profil."""
         Voucher = self.Voucher.with_user(self.secretary)
@@ -192,3 +202,87 @@ class TestSecretariatSettings(SecretariatCase):
             })
         with self.assertRaises(UserError):
             wizard.action_save()
+
+    # ------------------------------------------------------------------
+    # Écran Paramètres (res.config.settings)
+    # ------------------------------------------------------------------
+
+    def test_settings_screen_reads_the_current_numbering(self):
+        self.Voucher._configure_numbering(start_number=6500, padding=8)
+        settings = self.env['res.config.settings'].create({})
+        self.assertEqual(settings.secretariat_voucher_start_number, 6500)
+        self.assertEqual(settings.secretariat_voucher_padding, 8)
+
+    def test_settings_screen_sets_the_start_number(self):
+        station = self.env['res.partner'].create({
+            'name': 'Station des paramètres', 'is_company': True})
+        self.env['res.config.settings'].create({
+            'secretariat_voucher_start_number': 7200,
+            'secretariat_voucher_padding': 6,
+            'secretariat_fuel_station_id': station.id,
+            'secretariat_usage_alert_days': 12,
+            'secretariat_usage_critical_days': 40,
+        }).execute()
+
+        self.assertEqual(
+            self.Voucher._number_sequence().number_next_actual, 7200)
+        self.assertEqual(self.Voucher.default_get(['name'])['name'], '007200')
+        self.assertEqual(self.env.company.secretariat_fuel_station_id, station)
+        self.assertEqual(self.env.company.secretariat_usage_alert_days, 12)
+        self.assertEqual(self.env.company.secretariat_usage_critical_days, 40)
+
+    def test_settings_screen_refuses_an_absurd_length(self):
+        from odoo.exceptions import UserError
+        settings = self.env['res.config.settings'].create({
+            'secretariat_voucher_start_number': 100,
+            'secretariat_voucher_padding': 0,
+        })
+        with self.assertRaises(UserError):
+            settings.execute()
+
+    def test_a_start_number_below_the_registry_is_respected(self):
+        """Un nouveau carnet peut recommencer plus bas — et ça tient.
+
+        Le recalage automatique ne regarde que les bons qui viennent d'être
+        créés, jamais tout le registre : régler le départ à 100 alors qu'un
+        bon 6300 existe ne fait pas ressauter le compteur à 6301.
+        """
+        self._voucher(name='6300')
+        self.env['res.config.settings'].create({
+            'secretariat_voucher_start_number': 100,
+            'secretariat_voucher_padding': 8,
+        }).execute()
+
+        proposed = self.Voucher.default_get(['name'])['name']
+        self.assertEqual(proposed, '00000100')
+        self._voucher(name=proposed)
+        self.assertEqual(self.Voucher.default_get(['name'])['name'], '00000101')
+
+    def test_the_settings_page_is_actually_rendered(self):
+        """La page Paramètres → Secrétariat se compose et porte ses champs.
+
+        Une vue héritée peut passer le chargement du module et se briser à
+        l'affichage. On assemble donc l'arch réellement servie au navigateur.
+        """
+        arch = self.env['res.config.settings'].get_view(view_type='form')['arch']
+        for field in ('secretariat_voucher_start_number',
+                      'secretariat_voucher_padding',
+                      'secretariat_voucher_highest_number',
+                      'secretariat_fuel_station_id',
+                      'secretariat_usage_alert_days'):
+            self.assertIn(field, arch, "%s absent de l'écran Paramètres" % field)
+
+    def test_both_configuration_screens_share_the_same_storage(self):
+        """L'assistant du responsable et l'écran Paramètres ne divergent pas."""
+        self.env['res.config.settings'].create({
+            'secretariat_voucher_start_number': 4242,
+            'secretariat_voucher_padding': 8,
+        }).execute()
+        wizard = self.env['secretariat.settings.wizard'].with_user(
+            self.manager).create({})
+        self.assertEqual(wizard.voucher_next_number, 4242)
+
+        wizard.voucher_next_number = 4300
+        wizard.action_save()
+        settings = self.env['res.config.settings'].create({})
+        self.assertEqual(settings.secretariat_voucher_start_number, 4300)

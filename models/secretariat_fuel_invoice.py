@@ -28,6 +28,7 @@ import calendar
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import float_is_zero
+from odoo.tools.sql import table_exists
 
 from .secretariat_fuel_voucher import MONTH_NAMES_FR, format_date_fr
 
@@ -157,8 +158,21 @@ class SecretariatFuelInvoice(models.Model):
         erreur. C'est le seul garde-fou qui tienne face à deux secrétaires qui
         génèrent la même quinzaine au même moment — la vérification applicative
         ne verrait rien dans une transaction concurrente.
+
+        **La garde sur l'existence de la table n'est pas une précaution de
+        style.** ``init()`` est aussi appelé par la réparation du registre
+        (``registry.check_tables_exist``), qui s'exécute précisément quand la
+        table MANQUE : c'est le cas pendant la mise à jour d'un AUTRE module,
+        tant que celui-ci n'a pas encore reçu son propre ``-u``. Sans la
+        garde, cet index fait échouer le chargement du registre — et donc la
+        mise à jour de l'autre module, qui n'a rien demandé. Constaté en
+        production le 2026-09-22 : un ``-u potting_management`` cassé par un
+        index du secrétariat. La table sera créée au ``-u`` de ce module, qui
+        rappellera ``init()``.
         """
         super().init()
+        if not table_exists(self.env.cr, self._table):
+            return
         self.env.cr.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS secretariat_fuel_invoice_period_uniq
             ON secretariat_fuel_invoice

@@ -45,6 +45,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from odoo.osv import expression
 from odoo.tools import float_compare, float_is_zero
+from odoo.tools.sql import table_exists
 
 # Mois en français, indexés de 1 à 12 — utilisés pour nommer les feuilles de
 # l'export au même format que le classeur d'origine (« Janvier 2026 »).
@@ -273,8 +274,14 @@ class SecretariatFuelVoucher(models.Model):
         numéro + date ; l'avertissement de re-saisie fait la même recherche à
         chaque frappe. Un index composite évite le parcours séquentiel dès que
         le registre dépasse quelques milliers de bons.
+
+        Garde sur l'existence de la table : ``init()`` est aussi appelé par la
+        réparation du registre, qui tourne quand la table manque — voir
+        l'explication détaillée sur ``secretariat.fuel.invoice.init()``.
         """
         super().init()
+        if not table_exists(self.env.cr, self._table):
+            return
         self.env.cr.execute("""
             CREATE INDEX IF NOT EXISTS secretariat_fuel_voucher_dedup_idx
             ON secretariat_fuel_voucher (name, date)

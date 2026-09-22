@@ -51,7 +51,7 @@ class SecretariatSettingsWizard(models.TransientModel):
         help="Numéro proposé au prochain bon créé. Réglez-le sur le premier "
              "numéro du carnet en cours ; il avance ensuite tout seul.")
     voucher_padding = fields.Integer(
-        string="Longueur du numéro",
+        string="Longueur du numéro de bon",
         help="Nombre de caractères du numéro, complété par des zéros à "
              "gauche. Huit par défaut.")
     highest_number = fields.Char(

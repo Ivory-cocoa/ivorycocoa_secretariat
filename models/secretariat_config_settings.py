@@ -37,7 +37,10 @@ class ResConfigSettings(models.TransientModel):
              "se recalera automatiquement si vous corrigez un numéro à la "
              "saisie.")
     secretariat_voucher_padding = fields.Integer(
-        string="Longueur du numéro",
+        # Libellé explicite : « Longueur du numéro » tout court entre en
+        # collision avec le matricule de hr_management sur le MÊME écran de
+        # paramètres, et Odoo le signale au chargement.
+        string="Longueur du numéro de bon",
         help="Nombre de caractères du numéro, complété par des zéros à "
              "gauche. Huit par défaut.")
     secretariat_voucher_highest_number = fields.Char(

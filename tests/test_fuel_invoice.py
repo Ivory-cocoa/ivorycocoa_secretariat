@@ -389,3 +389,37 @@ class TestFuelInvoiceWizards(SecretariatCase):
         data = self.env['secretariat.dashboard'].get_dashboard_data('month')
         actions = [reco['action'] for reco in data['billing']['recommendations']]
         self.assertIn('no_station', actions)
+
+
+@tagged('post_install', '-at_install')
+class TestRegistryRepair(SecretariatCase):
+    """``init()`` ne doit pas supposer que sa table existe.
+
+    Odoo appelle ``init()`` depuis ``registry.check_tables_exist``, une
+    réparation qui s'exécute **précisément quand la table manque** : c'est le
+    cas tant que ce module n'a pas reçu son propre ``-u``, alors que son code
+    est déjà déployé. Un ``init()`` qui écrit sur sa table fait alors échouer
+    le chargement du registre — et donc la mise à jour de n'importe quel autre
+    module. Panne constatée en production le 2026-09-22 (un
+    ``-u potting_management`` cassé par l'index de la facture de station).
+    """
+
+    class _Rollback(Exception):
+        """Sentinelle : fait annuler le point de sauvegarde à coup sûr."""
+
+    def _assert_init_survives(self, model_name, table):
+        with self.assertRaises(self._Rollback):
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute('DROP TABLE "%s" CASCADE' % table)
+                # Le vrai test : si init() écrit sur la table absente, c'est
+                # une UndefinedTable qui remonte ici, pas la sentinelle.
+                self.env[model_name].init()
+                raise self._Rollback()
+
+    def test_invoice_init_survives_a_missing_table(self):
+        self._assert_init_survives(
+            'secretariat.fuel.invoice', 'secretariat_fuel_invoice')
+
+    def test_voucher_init_survives_a_missing_table(self):
+        self._assert_init_survives(
+            'secretariat.fuel.voucher', 'secretariat_fuel_voucher')

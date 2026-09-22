@@ -77,8 +77,12 @@ class TestSecretariatDashboard(SecretariatCase):
     def test_totals_and_variation_against_the_previous_period(self):
         self._voucher('D1', 10)
         self._voucher('D2', 30)
-        previous_month = self.month_start - relativedelta(months=1)
-        self._voucher('D0', 20, date=previous_month)
+        # La période de comparaison a la MÊME DURÉE que la période affichée,
+        # elle ne couvre donc pas forcément tout le mois précédent : en
+        # septembre (30 jours), elle commence le 2 août. Dater le bon de la
+        # veille du 1er le place à coup sûr dedans — sinon le test échoue un
+        # mois sur deux, selon la longueur des mois.
+        self._voucher('D0', 20, date=self.month_start - relativedelta(days=1))
 
         stats = self.Dashboard.get_dashboard_data('month')['fuel']['stats']
         self.assertEqual(stats['voucher_count'], 2)
@@ -192,5 +196,8 @@ class TestSecretariatDashboard(SecretariatCase):
             data = self.Dashboard.get_dashboard_data('month')
         finally:
             type(self.env['secretariat.dashboard.fuel']).get_section_data = original
-        self.assertEqual(data['sections'], [])
+        # La section en erreur disparaît ; les autres sont rendues.
+        self.assertNotIn('fuel', data['sections'])
+        self.assertNotIn('fuel', data)
+        self.assertIn('billing', data['sections'])
         self.assertIn('period', data)

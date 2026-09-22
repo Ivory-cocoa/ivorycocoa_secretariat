@@ -96,9 +96,12 @@ class SecretariatFuelMonthlyReportWizard(models.TransientModel):
     def _domain(self):
         self.ensure_one()
         states = ['confirmed'] if not self.include_draft else ['draft', 'confirmed']
+        # Borné sur la date de référence (utilisation si connue, émission
+        # sinon) : l'état récapitulatif arrête une consommation, pas une
+        # émission de carnets.
         domain = [
-            ('date', '>=', self.date_from),
-            ('date', '<=', self.date_to),
+            ('date_effective', '>=', self.date_from),
+            ('date_effective', '<=', self.date_to),
             ('state', 'in', states),
         ]
         if self.fuel_type_ids:
@@ -111,7 +114,7 @@ class SecretariatFuelMonthlyReportWizard(models.TransientModel):
 
     def _vouchers(self):
         return self.env['secretariat.fuel.voucher'].search(
-            self._domain(), order='date asc, name asc, id asc')
+            self._domain(), order='date_effective asc, name asc, id asc')
 
     @api.model
     def _bucket(self, vouchers, key):

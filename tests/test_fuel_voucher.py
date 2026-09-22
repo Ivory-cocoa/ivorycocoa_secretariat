@@ -167,6 +167,11 @@ class TestFuelVoucher(SecretariatCase):
         draft._onchange_fuel_type_id()
         self.assertAlmostEqual(draft.price_unit, 913.0)
 
-    def test_the_number_is_trimmed_on_write(self):
+    def test_the_number_is_trimmed_and_padded_on_write(self):
+        """Le numéro saisi est nettoyé, puis complété à huit caractères.
+
+        L'historique, lui, n'est pas renuméroté : l'import du classeur reprend
+        les numéros tels quels (cf. test_fuel_import_export).
+        """
         voucher = self._voucher(name='  6275  ')
-        self.assertEqual(voucher.name, '6275')
+        self.assertEqual(voucher.name, '00006275')

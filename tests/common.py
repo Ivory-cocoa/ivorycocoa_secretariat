@@ -33,6 +33,14 @@ class SecretariatCase(TransactionCase):
         Les types de carburant sont conservés : ce sont des données du module,
         auxquelles les tests se réfèrent par leur identifiant externe.
         """
+        # Les factures d'abord : un bon facturé refuse d'être supprimé, et
+        # l'annulation d'une facture détache ses bons.
+        invoices = cls.env['secretariat.fuel.invoice'].search([])
+        if invoices:
+            invoices.filtered(lambda i: i.state == 'paid').action_unpay()
+            invoices.filtered(lambda i: i.state != 'cancelled').action_cancel()
+            invoices.unlink()
+
         vouchers = cls.env['secretariat.fuel.voucher'].with_context(
             active_test=False).search([])
         if vouchers:

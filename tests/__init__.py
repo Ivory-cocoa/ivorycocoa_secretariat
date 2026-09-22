@@ -6,3 +6,6 @@ from . import test_fuel_quota
 from . import test_reports
 from . import test_dashboard
 from . import test_merge
+from . import test_fuel_numbering
+from . import test_usage_delay
+from . import test_fuel_invoice

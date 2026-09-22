@@ -125,9 +125,15 @@ class SecretariatVehicle(models.Model):
             record.amount_total = amount
 
     def _compute_month_usage(self):
-        """Consommation du mois civil en cours, rapportée au plafond."""
+        """Consommation du mois civil en cours, rapportée au plafond.
+
+        Bornée sur la date de référence du bon : la dotation d'un engin se
+        juge sur le carburant qu'il a réellement consommé dans le mois, pas
+        sur les bons qui lui ont été remis.
+        """
         start, end = self._current_month_bounds()
-        stats = self._voucher_stats([('date', '>=', start), ('date', '<=', end)])
+        stats = self._voucher_stats([
+            ('date_effective', '>=', start), ('date_effective', '<=', end)])
         for record in self:
             _count, quantity, amount = stats.get(record.id, (0, 0.0, 0.0))
             record.month_quantity = quantity
@@ -210,7 +216,7 @@ class SecretariatVehicle(models.Model):
             'view_mode': 'tree,form',
             'domain': [
                 ('vehicle_id', '=', self.id),
-                ('date', '>=', start), ('date', '<=', end),
+                ('date_effective', '>=', start), ('date_effective', '<=', end),
                 ('state', '!=', 'cancelled'),
             ],
             'context': {'default_vehicle_id': self.id},

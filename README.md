@@ -6,8 +6,9 @@ la racine **Secrétariat**, et apporte sa section au tableau de bord.
 
 | Fonctionnalité | Version | Menu |
 |---|---|---|
-| Tableau de bord | 17.0.2.2.0 | Secrétariat → Tableau de bord |
-| Bons de carburant | 17.0.2.2.0 | Secrétariat → Carburant |
+| Tableau de bord | 17.0.3.0.0 | Secrétariat → Tableau de bord |
+| Bons de carburant | 17.0.3.0.0 | Secrétariat → Carburant |
+| Facturation des stations | 17.0.3.0.0 | Secrétariat → Facturation |
 
 ---
 
@@ -24,7 +25,8 @@ séparation est donc faite dès maintenant :
 | Modèle | Rôle |
 |---|---|
 | `secretariat.dashboard` | La **coque** : période, devise, profil, assemblage des sections |
-| `secretariat.dashboard.fuel` | La **section carburant** : tout le calcul métier |
+| `secretariat.dashboard.fuel` | La **section carburant** : consommation, dotations, délais d'utilisation |
+| `secretariat.dashboard.billing` | La **section facturation** : quinzaine en cours, encours, écarts |
 
 Ajouter une section = ajouter un modèle abstrait exposant `get_section_data()`,
 l'inscrire dans `secretariat.dashboard._SECTIONS`, et ajouter son bloc au
@@ -81,6 +83,24 @@ Remplace le classeur Excel tenu à la main (`docs/secretariat/yasmina_petroleum.
 
 ### Deux partis pris
 
+**Le numéro est proposé, jamais imposé.** Un compteur (`ir.sequence`,
+padding 8) propose le prochain numéro à la création, à partir d'un numéro de
+départ réglable dans **Configuration → Paramètres du secrétariat**. Il reste
+modifiable : c'est la souche papier qui fait foi, et un compteur qui
+imposerait son propre numéro finirait par diverger du carnet.
+
+Trois précautions rendent ce compromis tenable :
+
+* le formulaire **lit** le compteur sans le consommer — une saisie abandonnée
+  ne troue pas la numérotation ;
+* après chaque création, le compteur se **recale** au-dessus du plus grand
+  numéro utilisé (jamais en dessous : un bon saisi en retard avec un vieux
+  numéro ne fait pas redescendre la suite) ;
+* les numéros purement numériques sont comparés à leur **valeur** :
+  « 6275 » et « 00006275 » sont le même bon. L'historique, saisi sans zéros de
+  remplissage, continue donc d'être dédoublonné correctement — et l'import du
+  classeur reprend les numéros **tels quels**, sans renuméroter le passé.
+
 **Le numéro de bon n'est pas unique.** Le carnet fait revenir le même numéro
 sur plusieurs lignes (un bon Super + un bon Lubrifiant le même jour, carnets
 différents). Une contrainte d'unicité serait fausse. Le dédoublonnage de
@@ -95,6 +115,35 @@ qui applique la clé complète.
 comporte des lignes sans engin ou sans nom ; les rendre obligatoires ferait
 échouer la reprise de l'historique. Ces bons sont marqués « incomplet » et le
 menu **Bons à compléter** les rassemble.
+
+### Deux dates : émission et utilisation
+
+Un bon est **émis** un jour et **utilisé** un autre — parfois des semaines plus
+tard. L'écart est précisément ce que la direction veut voir.
+
+| Champ | Sens |
+|---|---|
+| `date` | Date d'**émission** : le bon est établi et remis au bénéficiaire |
+| `date_used` | Date d'**utilisation** : le bon est servi à la station (vide tant qu'il n'est pas revenu) |
+| `date_effective` | **Date de référence** = utilisation si connue, émission sinon |
+| `usage_delay_days` | Écart entre les deux, en jours |
+| `usage_alert` | `used` / `pending` / `late` / `critical`, selon les seuils de la société |
+
+`date_effective` est la date qui **rattache** le bon à un mois de consommation,
+à une dotation mensuelle et à une quinzaine de facturation : on compte le
+carburant quand il est servi, pas quand le carnet est rempli. Les bons repris
+de l'ancien classeur n'ont qu'une date — le repli les laisse dans leur mois
+d'origine, les chiffres historiques ne bougent pas.
+
+`usage_alert` n'est **pas stocké** : un bon non utilisé vieillit tout seul, et
+un champ stocké afficherait une alerte périmée jusqu'au prochain recalcul. Il
+porte une méthode `search=` qui retraduit chaque état en bornes de date, si
+bien qu'il reste filtrable depuis la vue de recherche et le tableau de bord.
+
+Les seuils (alerte et critique, 15 et 30 jours par défaut) se règlent par
+société dans **Configuration → Paramètres du secrétariat**. Ils ne bloquent
+rien : ils alimentent les statistiques, les pastilles et les **recommandations**
+du tableau de bord — le rôle du secrétariat est de constater, pas d'autoriser.
 
 ### Saisie
 
@@ -267,6 +316,87 @@ L'état récapitulatif est le document à faire viser par la direction. Un bouto
 Le bon utilise `web.basic_layout` et dessine son propre en-tête : l'impression
 n'ouvre donc pas l'assistant de mise en page d'Odoo (`config=False`).
 
+---
+
+## 2. Facturation des stations
+
+Les stations facturent **deux fois par mois** : du 1er au 15, puis du 16 à la
+fin du mois. Le modèle `secretariat.fuel.invoice` est le document de contrôle
+qui regroupe les bons d'une station sur une quinzaine.
+
+### Trois partis pris
+
+**La quinzaine est une période civile, pas un intervalle libre.** Les bornes
+sont calculées à partir de (année, mois, quinzaine) — jamais saisies. Deux
+factures qui se chevauchent factureraient deux fois les mêmes bons sans que
+rien ne le montre.
+
+**Le rattachement se fait sur `date_effective`.** On paie la station pour ce
+qu'elle a servi, pas pour ce que le secrétariat a écrit.
+
+**L'écart avec le relevé ne bloque pas, mais doit être justifié.** Valider une
+facture qui ne tombe pas juste exige une explication écrite : c'est la seule
+trace qui restera dans six mois.
+
+### Garde-fous
+
+| Garde-fou | Mise en œuvre |
+|---|---|
+| Un bon n'appartient qu'à une seule facture | `invoice_id` (Many2one) |
+| Une seule facture vivante par station et quinzaine | **Index unique partiel** (`WHERE state != 'cancelled'`) — tient face à deux saisies concurrentes, ce qu'un contrôle applicatif ne fait pas |
+| Une facture validée fige ses bons | `INVOICE_LOCKED_FIELDS`, y compris la station et la date d'utilisation |
+| Un bon facturé ne peut être ni annulé ni supprimé | `action_cancel` / `unlink` |
+| Annuler une facture rend ses bons à la facturation | `action_cancel` détache et le journalise |
+
+Le dernier point mérite l'explication : laissés attachés à une facture annulée,
+les bons n'apparaîtraient plus comme facturables et seraient purement et
+simplement oubliés.
+
+### Le geste courant
+
+**Facturation → Générer les factures de la quinzaine** : l'assistant montre un
+**aperçu** station par station (nombre de bons, montant, effet sur une facture
+existante) **avant** toute écriture, puis crée une facture par station. Les
+bons dont la station n'est pas renseignée sont rattachés à la station par
+défaut de la société si elle est définie — sinon ils sont signalés comme non
+facturables, jamais escamotés.
+
+Une station qui a déjà une facture non annulée sur la quinzaine n'en reçoit pas
+une seconde : ses bons manquants complètent la facture existante si elle est
+encore en brouillon, et l'assistant le dit si elle est déjà validée.
+
+### Cycle de vie
+
+`Brouillon` → `Validée` → `Payée`, plus `Annulée`. Valider une facture valide
+au passage les bons restés en brouillon qu'elle porte : on ne paie pas un bon
+non validé.
+
+### États imprimés
+
+| Document | Format | Contenu |
+|---|---|---|
+| Facture de station | PDF A4 | Identification, montants confrontés, répartition par carburant, détail des bons, trois signatures |
+| État annuel des factures | PDF A4 **paysage** + Excel | Matrice stations × 12 mois, totaux, réglé / reste à payer, écarts cumulés, comparaison N-1 |
+
+Le paysage n'est pas un choix esthétique : douze colonnes de mois plus le total
+ne tiennent pas en portrait. Le PDF et le classeur Excel sont produits à partir
+du **même** `report_data()` — un chiffre lu dans l'un est celui de l'autre.
+
+---
+
+## 3. Paramètres
+
+**Configuration → Paramètres du secrétariat** (assistant, réservé au
+responsable) : station par défaut, seuils de délai d'utilisation, numéro de
+départ et longueur du numéro.
+
+Pourquoi un assistant plutôt que l'écran de configuration d'Odoo : ces valeurs
+vivent sur `res.company` et sur `ir.sequence`, deux modèles qui exigent les
+droits d'**administration**. Il aurait fallu donner ces droits à la personne
+qui, précisément, ne fait que tenir le carnet. L'assistant écrit en `sudo`
+**après** avoir contrôlé explicitement l'appartenance au groupe métier : c'est
+le groupe qui autorise, pas le contournement.
+
 ### Profils
 
 | Groupe | Droits |
@@ -278,7 +408,7 @@ n'ouvre donc pas l'assistant de mise en page d'Odoo (`config=False`).
 
 ## Tests
 
-98 tests, répartis en six fichiers. Ils partent tous de `SecretariatCase`
+153 tests, répartis en neuf fichiers. Ils partent tous de `SecretariatCase`
 (`tests/common.py`), qui **vide le registre des bons** avant chaque classe :
 plusieurs écrans agrègent toute la base (bons à compléter, export « toute la
 période », état du mois), des tests qui comptent des enregistrements ne
@@ -294,11 +424,20 @@ repris. Rien n'est détruit : Odoo annule la transaction à la fin.
 | `test_reports.py` | Rendu des deux rapports et données de l'état mensuel |
 | `test_dashboard.py` | Structure du retour, périodes, variations, compteurs, doublons, anomalies, tendance |
 | `test_merge.py` | Rapprochement des libellés (dont le piège des immatriculations) et fusion |
+| `test_fuel_numbering.py` | Compteur proposé et non consommé, recalage, normalisation, droits du profil secrétaire |
+| `test_usage_delay.py` | Deux dates, délais, `usage_alert` et sa recherche, statistiques et recommandations |
+| `test_fuel_invoice.py` | Quinzaines, collecte, verrous, écarts, index unique, assistants, états PDF et Excel |
 
 ```bash
-docker exec odoo17-web-dev odoo -d <base> -u ivorycocoa_secretariat \
-    --addons-path=/mnt/extra-addons,/mnt/oca-addons,/usr/lib/python3/dist-packages/odoo/addons \
-    --test-enable --test-tags /ivorycocoa_secretariat --stop-after-init
+# Depuis la racine du projet. Le conteneur jetable évite le conflit
+# « concurrent update » avec le serveur principal ; arrêter celui-ci pour un
+# premier `-i`, le relancer ensuite.
+docker compose -f docker-compose.dev.yml run --rm --no-deps web \
+    odoo -d test_secretariat -u ivorycocoa_secretariat \
+    --addons-path=/usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons,/mnt/oca-addons \
+    --db_host=db --db_user=odoo --db_password=odoo \
+    --test-tags=/ivorycocoa_secretariat --http-port=8099 \
+    --stop-after-init --log-level=info
 ```
 
 ## Logo

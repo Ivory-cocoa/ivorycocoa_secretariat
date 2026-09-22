@@ -468,7 +468,11 @@ class SecretariatFuelImportWizard(models.TransientModel):
             except UserError as exc:
                 errors.append(dict(row, error=str(exc), culprit='fuel'))
 
-        vouchers = Voucher.create(values_list) if values_list else Voucher
+        # ``secretariat_keep_number`` : les numéros du classeur sont repris
+        # tels quels, sans complément à huit caractères (cf. le modèle).
+        vouchers = Voucher.with_context(
+            secretariat_keep_number=True).create(values_list) \
+            if values_list else Voucher
 
         self.write({
             'state': 'done',

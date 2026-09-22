@@ -25,6 +25,16 @@ const FUEL_PALETTE = [
     "#64748b", "#ec4899",
 ];
 
+const EMPTY_DELAY = {
+    alert_days: 15, critical_days: 30,
+    used_count: 0, period_count: 0, coverage: 0, coverage_min: 50,
+    average: 0, median: 0, max: 0, same_day: 0,
+    previous_average: 0, average_delta: null,
+    buckets: [],
+    pending_count: 0, pending_amount: 0,
+    late_count: 0, critical_count: 0, critical_ids: [], oldest: [],
+};
+
 const EMPTY_STATE = {
     stats: {
         voucher_count: 0, quantity: 0, amount: 0,
@@ -35,7 +45,9 @@ const EMPTY_STATE = {
     todo: {
         draft: 0, incomplete: 0, future: 0, duplicates: 0,
         duplicate_ids: [], over_quota: 0, unlinked_beneficiaries: 0,
+        late_usage: 0, uninvoiced: 0,
     },
+    usage_delay: EMPTY_DELAY,
     monthly_trend: [],
     fuel_split: [],
     top_vehicles: [],
@@ -44,6 +56,26 @@ const EMPTY_STATE = {
     anomalies: [],
     recent: [],
     price_reference: [],
+    recommendations: [],
+};
+
+const EMPTY_BILLING = {
+    current_period: {
+        label: "", half_label: "", month_label: "",
+        date_from: "", date_to: "", closed: false, days_left: 0,
+    },
+    stats: {
+        period_count: 0, period_amount: 0,
+        draft_count: 0, draft_amount: 0,
+        to_pay_count: 0, to_pay_amount: 0,
+        paid_count: 0, paid_amount: 0,
+        overdue_count: 0, difference_count: 0, difference_amount: 0,
+    },
+    pending_by_station: [],
+    pending_total: { count: 0, amount: 0 },
+    monthly: { year: 0, months: [] },
+    recent: [],
+    recommendations: [],
 };
 
 export class SecretariatDashboard extends Component {
@@ -57,6 +89,7 @@ export class SecretariatDashboard extends Component {
 
         this.trendChartRef = useRef("trendChart");
         this.fuelChartRef = useRef("fuelChart");
+        this.billingChartRef = useRef("billingChart");
         this._charts = {};
         this._reducedMotion =
             window.matchMedia &&
@@ -73,6 +106,7 @@ export class SecretariatDashboard extends Component {
             currency: { symbol: "", position: "after", decimals: 0 },
             user: { name: "", is_manager: false },
             fuel: JSON.parse(JSON.stringify(EMPTY_STATE)),
+            billing: JSON.parse(JSON.stringify(EMPTY_BILLING)),
         });
 
         onWillStart(async () => {
@@ -119,6 +153,8 @@ export class SecretariatDashboard extends Component {
             this.state.user = result.user || this.state.user;
             this.state.fuel = Object.assign(
                 JSON.parse(JSON.stringify(EMPTY_STATE)), result.fuel || {});
+            this.state.billing = Object.assign(
+                JSON.parse(JSON.stringify(EMPTY_BILLING)), result.billing || {});
         } catch (error) {
             this.notification.add(
                 "Le tableau de bord n'a pas pu être chargé.", { type: "danger" });
@@ -229,6 +265,16 @@ export class SecretariatDashboard extends Component {
                 hint: "Dotation mensuelle dépassée ce mois-ci.",
             },
             {
+                key: "late_usage", label: "Bons en circulation", icon: "fa-hourglass-end",
+                count: todo.late_usage, level: "danger",
+                hint: "Émis il y a longtemps, jamais utilisés : ils peuvent encore être servis n'importe quand.",
+            },
+            {
+                key: "uninvoiced", label: "Bons à facturer", icon: "fa-file-text-o",
+                count: todo.uninvoiced, level: "info",
+                hint: "Bons servis, rattachés à une station, pas encore repris dans une facture de quinzaine.",
+            },
+            {
                 key: "future", label: "Dates dans le futur", icon: "fa-calendar-times-o",
                 count: todo.future, level: "warn",
                 hint: "Souvent une faute de frappe dans l'année.",
@@ -284,6 +330,7 @@ export class SecretariatDashboard extends Component {
         }
         this._renderTrendChart();
         this._renderFuelChart();
+        this._renderBillingChart();
     }
 
     _renderTrendChart() {
@@ -368,6 +415,99 @@ export class SecretariatDashboard extends Component {
         });
     }
 
+    _renderBillingChart() {
+        const months = this.state.billing.monthly.months || [];
+        const hasData = months.some((month) => month.amount);
+        const el = hasData ? this.billingChartRef.el : null;
+        this._upsertChart("billing", el, {
+            type: "bar",
+            data: {
+                labels: months.map((month) => month.short),
+                datasets: [{
+                    label: `Facturé ${this.state.billing.monthly.year || ""}`,
+                    data: months.map((month) => Math.round(month.amount)),
+                    backgroundColor: "rgba(16, 185, 129, 0.45)",
+                    borderColor: "#10b981",
+                    borderWidth: 1,
+                    borderRadius: 3,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: this._reducedMotion ? false : { duration: 500 },
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true } },
+            },
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Suivi d'utilisation et recommandations
+    // ------------------------------------------------------------------
+
+    /** Largeur de barre d'une tranche de délai, la plus fournie faisant 100 %. */
+    bucketWidth(row) {
+        const buckets = this.state.fuel.usage_delay.buckets || [];
+        const max = Math.max(1, ...buckets.map((bucket) => bucket.count || 0));
+        return Math.round(((row.count || 0) / max) * 100);
+    }
+
+    delayClass(value) {
+        const delay = this.state.fuel.usage_delay;
+        if (value > delay.critical_days) {
+            return "sec-quota--over";
+        }
+        return value > delay.alert_days ? "sec-quota--warn" : "sec-quota--ok";
+    }
+
+    recoClass(level) {
+        return `sec-reco--${level}`;
+    }
+
+    /** Ouvre l'écran correspondant à une recommandation. */
+    openRecommendation(action) {
+        if (!action) {
+            return undefined;
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        switch (action) {
+            case "critical_usage":
+                return this._openList("Bons en circulation depuis trop longtemps",
+                    [["usage_alert", "=", "critical"]]);
+            case "late_usage":
+                return this._openList("Bons utilisés tardivement",
+                    [["usage_alert", "in", ["late", "critical"]]]);
+            case "pending_usage":
+                return this._openAction(
+                    "ivorycocoa_secretariat.action_secretariat_fuel_voucher_pending");
+            case "duplicates":
+                return this.openTodo("duplicates");
+            case "incomplete":
+                return this.openTodo("incomplete");
+            case "no_station":
+                return this._openList("Bons sans station", [
+                    ["supplier_id", "=", false],
+                    ["state", "!=", "cancelled"],
+                ]);
+            case "generate_invoices":
+                return this.generateInvoices();
+            case "overdue":
+                return this._openInvoices("Factures en retard de paiement", [
+                    ["state", "=", "confirmed"],
+                    ["date_due", "!=", false],
+                    ["date_due", "<", today],
+                ]);
+            case "differences":
+                return this._openInvoices("Factures avec écart", [
+                    ["has_difference", "=", true],
+                    ["state", "!=", "cancelled"],
+                ]);
+            default:
+                return undefined;
+        }
+    }
+
     // ------------------------------------------------------------------
     // Navigation
     // ------------------------------------------------------------------
@@ -401,6 +541,16 @@ export class SecretariatDashboard extends Component {
             case "over_quota":
                 return this.action.doAction(
                     "ivorycocoa_secretariat.action_secretariat_vehicle_over_quota");
+            case "late_usage":
+                return this._openList("Bons en circulation depuis trop longtemps",
+                    [["usage_alert", "=", "critical"]]);
+            case "uninvoiced":
+                return this._openList("Bons à facturer", [
+                    ["invoice_id", "=", false],
+                    ["supplier_id", "!=", false],
+                    ["state", "!=", "cancelled"],
+                    ["date_effective", "<=", new Date().toISOString().slice(0, 10)],
+                ]);
             case "future":
                 return this._openList("Bons datés dans le futur", [
                     ["date", ">", new Date().toISOString().slice(0, 10)],
@@ -440,6 +590,85 @@ export class SecretariatDashboard extends Component {
 
     openExport() {
         this._openAction("ivorycocoa_secretariat.action_secretariat_fuel_export_wizard");
+    }
+
+    _openInvoices(name, domain) {
+        this.action.doAction({
+            type: "ir.actions.act_window",
+            name,
+            res_model: "secretariat.fuel.invoice",
+            views: [[false, "list"], [false, "form"]],
+            domain,
+            target: "current",
+        });
+    }
+
+    openInvoices() {
+        this._openAction("ivorycocoa_secretariat.action_secretariat_fuel_invoice");
+    }
+
+    openInvoicesToPay() {
+        this._openAction(
+            "ivorycocoa_secretariat.action_secretariat_fuel_invoice_to_pay");
+    }
+
+    openInvoice(invoiceId) {
+        if (!invoiceId) {
+            return;
+        }
+        this.action.doAction({
+            type: "ir.actions.act_window",
+            res_model: "secretariat.fuel.invoice",
+            res_id: invoiceId,
+            views: [[false, "form"]],
+            target: "current",
+        });
+    }
+
+    generateInvoices() {
+        this._openAction(
+            "ivorycocoa_secretariat.action_secretariat_fuel_invoice_generate_wizard");
+    }
+
+    openAnnualReport() {
+        this._openAction(
+            "ivorycocoa_secretariat.action_secretariat_fuel_invoice_annual_wizard");
+    }
+
+    openPendingUsage() {
+        this._openAction(
+            "ivorycocoa_secretariat.action_secretariat_fuel_voucher_pending");
+    }
+
+    /** Bons non facturés d'une station — ligne du tableau « à facturer ». */
+    openStationPending(row) {
+        const domain = [
+            ["invoice_id", "=", false],
+            ["state", "!=", "cancelled"],
+            ["date_effective", "<=", this.state.billing.current_period.date_to],
+        ];
+        domain.push(row.unassigned
+            ? ["supplier_id", "=", false]
+            : ["supplier_id", "=", row.id]);
+        this._openList(`Bons à facturer — ${row.name}`, domain);
+    }
+
+    invoiceStateLabel(state) {
+        return {
+            draft: "Brouillon",
+            confirmed: "À payer",
+            paid: "Payée",
+            cancelled: "Annulée",
+        }[state] || state;
+    }
+
+    invoiceStateClass(state) {
+        return {
+            draft: "sec-chip--info",
+            confirmed: "sec-chip--warn",
+            paid: "sec-chip--ok",
+            cancelled: "sec-chip--muted",
+        }[state] || "sec-chip--muted";
     }
 
     openMonthlyReport() {
